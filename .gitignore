@@ -3,6 +3,8 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 
+imgui.ini
+
 # User-specific files
 *.suo
 *.user
@@ -321,4 +323,3 @@ ASALocalRun/
 
 # MSBuild Binary and Structured Log
 *.binlog
-

@@ -8,6 +8,12 @@ void DrawMainMenu(MainMenuState* state)
 	ImGui::MenuItem("File", "Alt+F", &state->fileEntrySelected);
 
 	ImGui::EndMainMenuBar();
+
+	ImGuiIO& io = ImGui::GetIO();
+	if (io.KeysDown[GLFW_KEY_F5] && io.KeysDownDuration[GLFW_KEY_F5] == 0.0f)
+	{
+		LoadDefaultShaders();
+	}
 }
 
 void DrawSpriteViewer(SpriteViewerData* state)
@@ -16,8 +22,8 @@ void DrawSpriteViewer(SpriteViewerData* state)
 	
 	if (ImGui::CollapsingHeader("Camera Control"))
 	{
-		ImGui::DragFloat3("Position", &state->cameraPosition[0]);
-		ImGui::DragFloat3("Target", &state->cameraTarget[0]);
+		ImGui::DragFloat3("Position", &state->camera->position[0]);
+		ImGui::DragFloat3("Target", &state->camera->target[0]);
 	}
 
 	ImVec2 remainingSpace = ImGui::GetContentRegionAvail();

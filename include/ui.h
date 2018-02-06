@@ -12,8 +12,7 @@ struct SpriteViewerData
 {
 	RenderTarget* associatedRT;
 
-	glm::vec3 cameraPosition;
-	glm::vec3 cameraTarget;
+	Camera* camera;
 };
 
 void DrawMainMenu(MainMenuState* state);
