@@ -57,12 +57,19 @@ struct Material
 	GLuint MLocation;
 };
 
-//struct BoneData
-//{
-//	int parent;
-//	int children[12];
-//	int childCount;
-//};
+//Full scene hierarchy
+struct SceneNode
+{
+	glm::mat4 transform;
+
+	//for our purpose, no need to keep bones names, we just store the hash used for lookup
+	uint64_t nameHash;
+
+	int parent;
+
+	int children[32];
+	int childrenCount;
+};
 
 struct Model
 {
@@ -73,11 +80,15 @@ struct Model
 
 	//map the node in the loaded model to their index into the node array.
 	//useful to get which index in the bone array a specific vertex is bound to
-	std::map<unsigned long, int> boneMapping;
+	std::map<unsigned int, int> nodeMapping;
+
+	//let's use a static array for now, should be enough for our purpose, and take "only" ~200kB
+	SceneNode sceneHierarchy[1024];
+	int sceneNodeCount;
 	
 	//hard limit, we only support 100 bones max in GPU anyway.
 	//Transform is a separate array to upload it right away to GPU easily
-	//TODO make that slightly more dynamic, right now, that take ~11 kB per model whatever the amount of bones..
+	//TODO make that slightly more dynamic, right now, that take ~7kB no matter the bone count of the model
 	//BoneData bonesData[100];
 	glm::mat4 boneTransform[100];
 
@@ -85,14 +96,8 @@ struct Model
 	glm::mat4 boneOffsets[100];
 	int boneCount;
 
-	//Unhappy of storing the full scene here, but easier fo rnow. rewrite later to store only stripped down data we need (node hierarchy + animations)
-	const aiScene* TEMP_scene;
-	glm::mat4 globalInverseTransform;
-	//for fast retrieval of a channel by name (once we copy to our own data struct we can optimize that)
-	std::map<unsigned long, aiNodeAnim*> nodeAnimLookup;
 
-	//TODO : move that to an animation class, temp test
-	double animationTime;
+	glm::mat4 globalInverseTransform;
 
 	GLuint boneTransformBuffer;
 	GLuint boneTransformBlockIndex;
@@ -112,7 +117,6 @@ namespace mesh
 
 namespace model
 {
-	void fromFile(Model* m, const char* file);
-	void tickAnimation(Model* m, float deltaTime);
+	void fromScene(Model* m, const aiScene* file);
 	void render(Model* m, Camera* cam);
 }

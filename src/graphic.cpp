@@ -1,4 +1,7 @@
-#include <graphic.h>
+#include "graphic.h"
+#include "animation.h"
+#include "ui.h"
+
 #include <cstdio>
 #include <assimp/cimport.h>
 #include <assimp/scene.h>
@@ -6,10 +9,6 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
-
-#define GLM_ENABLE_EXPERIMENTAL
-#include <glm/gtx/transform.hpp>
-#include <glm/gtx/quaternion.hpp>
 
 const char *vertexShaderSource =
 "#version 330 core\n"
@@ -57,20 +56,6 @@ const char *fragmentShaderSource =
 "\tcolor = col;\n"
 "\n"
 "}";
-
-//TODO : move to utility h/cpp?
-//Hash function to hash bone name to use as ID in the bone lookup function
-static unsigned long
-sdbm(const char *str)
-{
-	unsigned long hash = 0;
-	int c;
-
-	while (c = *str++)
-		hash = c + (hash << 6) + (hash << 16) - hash;
-
-	return hash;
-}
 
 GLuint defaultProgram = -1;
 
@@ -211,6 +196,8 @@ GLFWwindow* CreateWindow()
 
 	glfwMakeContextCurrent(window);
 	glfwSwapInterval(1);
+
+	glfwSetDropCallback(window, fileDropCallback);
 
 	glewInit();
 
@@ -366,24 +353,35 @@ void mesh::render(Mesh* mesh, Material* mat, glm::mat4 modelMatrix, glm::mat4 ca
 	glDisableVertexAttribArray(4);
 }
 
-
-void model::fromFile(Model* m, const char* file)
+void parseSceneHierarchy(Model* m, aiNode* node, int index)
 {
-	//option import generate loads of stuff like tangent, normal etc.. so let's assume they are here
-	const aiScene* scene = aiImportFile(file, aiProcessPreset_TargetRealtime_MaxQuality);
+	m->sceneHierarchy[index].transform = glm::transpose(glm::make_mat4(&node->mTransformation.a1));
+	m->sceneHierarchy[index].nameHash = hashString(node->mName.data);
+	m->sceneHierarchy[index].childrenCount = node->mNumChildren;
 
-	m->TEMP_scene = scene;
+	//end is where we have free index to write the child to
+	int end = m->sceneNodeCount;
+	m->sceneNodeCount += node->mNumChildren;
+
+	assert(m->sceneNodeCount < 1024);
+
+	for (int i = 0; i < node->mNumChildren; ++i)
+	{
+		m->sceneHierarchy[index].children[i] = end + i;
+		m->sceneHierarchy[end + i].parent = index;
+		parseSceneHierarchy(m, node->mChildren[i], end + i);
+	}
+}
+
+
+void model::fromScene(Model* m, const aiScene* scene)
+{
 	m->globalInverseTransform = glm::inverse(glm::transpose(glm::make_mat4(&scene->mRootNode->mTransformation.a1)));
 
-	aiAnimation* anim = scene->mAnimations[0];
-	for (int i = 0; i < anim->mNumChannels; ++i)
-	{
-		unsigned long hash = sdbm(anim->mChannels[i]->mNodeName.C_Str());
-
-		m->nodeAnimLookup[hash] = anim->mChannels[i];
-	}
-
-	m->animationTime = 0;
+	//copy scene hierarchy
+	m->sceneNodeCount = 1;
+	m->sceneHierarchy[0].parent = -1;
+	parseSceneHierarchy(m, scene->mRootNode, 0);
 
 	m->meshCount = scene->mNumMeshes;
 
@@ -426,13 +424,13 @@ void model::fromFile(Model* m, const char* file)
 
 			//find this bone id in the mapping, or if still not mapped, add it
 			int mappedIndex = 0;
-			unsigned long hash = sdbm(bone->mName.C_Str());
-			auto it = m->boneMapping.find(hash);
-			if (it == m->boneMapping.end())
+			uint64_t hash = hashString(bone->mName.data);
+			auto it = m->nodeMapping.find(hash);
+			if (it == m->nodeMapping.end())
 			{
 				mappedIndex = m->boneCount;
 				m->boneCount += 1;
-				m->boneMapping[hash] = mappedIndex;
+				m->nodeMapping[hash] = mappedIndex;
 				m->boneOffsets[mappedIndex] = *((glm::mat4*)&bone->mOffsetMatrix.a1);
 				m->boneOffsets[mappedIndex] = glm::transpose(m->boneOffsets[mappedIndex]);
 			}
@@ -467,141 +465,26 @@ void model::fromFile(Model* m, const char* file)
 	GLuint blockIdx = glGetUniformBlockIndex(defaultProgram, "Bone");
 	glUniformBlockBinding(defaultProgram, blockIdx, 1);
 
+	for (int i = 0; i < 100; ++i)
+	{//we init all bone transform to identity by default so a model without anim can be loaded
+		m->boneTransform[i] = glm::mat4(1.0f);
+	}
+
 	glGenBuffers(1, &m->boneTransformBuffer);
 	glBindBuffer(GL_UNIFORM_BUFFER, m->boneTransformBuffer);
-	glBufferData(GL_UNIFORM_BUFFER, sizeof(glm::mat4) * m->boneCount, NULL, GL_STREAM_DRAW);
+	glBufferData(GL_UNIFORM_BUFFER, sizeof(glm::mat4) * m->boneCount, glm::value_ptr(m->boneTransform[0]), GL_STREAM_DRAW);
 	glBindBufferBase(GL_UNIFORM_BUFFER, 1, m->boneTransformBuffer);
+	glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
 
 void model::render(Model* m, Camera* cam)
 {
-	/*glUniformBlockBinding(defaultProgram, 1, 1);
-	glBindBufferRange(GL_UNIFORM_BUFFER, 1, m->boneTransformBuffer, 0, sizeof(glm::mat4) * m->boneCount);*/
-
+	glm::mat4 Model = glm::mat4(1.0f);
 	for (int i = 0; i < m->meshCount; ++i)
 	{
-		glm::mat4 Model = glm::mat4(1.0f);
-		//Model = glm::translate(Model, glm::vec3(1, 2, 3));
-		//Model = glm::translate(Model, glm::vec3(i, 0, 0));
-		//Model = glm::scale(Model, glm::vec3(0.1, 0.1, 0.1));
-
 		mesh::render(&m->meshArray[i], &m->materialArray[i], Model, cam->viewProjMat);
 	}
 }
 
-glm::vec3 interpolateVectorKey(const aiVectorKey* keys, int keyCount, double timeInTick)
-{
-	if (keyCount == 1)
-		return glm::make_vec3(&keys[0].mValue.x);
 
-	int startIdx = 0;
-	double startTime = 0;
-	double endTime = 0;
 
-	for (int i = 1; i < keyCount-1; ++i)
-	{
-		float t = keys[i].mTime;
-		if (t > timeInTick)
-		{
-			endTime = t;
-			break;
-		}
-
-		startTime = t;
-		startIdx = i;
-	}
-
-	assert(startIdx + 1 < keyCount);
-
-	double amount = (endTime - timeInTick) / (endTime - startTime);
-
-	glm::vec3 start = glm::make_vec3(&keys[startIdx].mValue.x);
-	glm::vec3 end = glm::make_vec3(&keys[startIdx + 1].mValue.x);
-
-	return glm::mix(start, end, glm::clamp(amount, 0.0, 1.0));
-}
-
-glm::quat createQuat(const aiQuaternion& quat)
-{
-	return glm::quat(quat.w,quat.x, quat.y,quat.z);
-}
-
-glm::quat interpolateQuatKey(const aiQuatKey* keys, int keyCount, double timeInTick)
-{
-	if (keyCount == 1)
-	{
-		return createQuat(keys[0].mValue);
-	}
-
-	int startIdx = 0;
-	double startTime = 0;
-	double endTime = 0;
-
-	for (int i = 1; i < keyCount-1; ++i)
-	{
-		float t = keys[i].mTime;
-		if (t > timeInTick)
-		{
-			endTime = t;
-			break;
-		}
-
-		startTime = t;
-		startIdx = i;
-	}
-
-	assert(startIdx + 1 < keyCount);
-
-	double amount = (endTime - timeInTick) / (endTime - startTime);
-
-	glm::quat start = createQuat(keys[startIdx].mValue);
-	glm::quat end = createQuat(keys[startIdx + 1].mValue);
-
-	return glm::mix(start, end,(float)glm::clamp(amount, 0.0, 1.0));
-}
-
-void tickNodeHierarchy(Model* m, const aiAnimation* animation, double timeInTick, const aiNode* pNode, const glm::mat4 parentTransform)
-{
-	unsigned long nameHash = sdbm(pNode->mName.C_Str());
-
-	glm::mat4 transformation = glm::transpose(glm::make_mat4(&pNode->mTransformation.a1));
-
-	const aiNodeAnim* pNodeAnim = m->nodeAnimLookup[nameHash];
-	auto it = m->boneMapping.find(nameHash);
-
-	if (pNodeAnim) 
-	{
-		glm::mat4 scale = glm::scale(interpolateVectorKey(pNodeAnim->mScalingKeys, pNodeAnim->mNumScalingKeys, timeInTick));
-		glm::mat4 rotation = glm::toMat4(interpolateQuatKey(pNodeAnim->mRotationKeys, pNodeAnim->mNumRotationKeys, timeInTick));
-		glm::mat4 translation = glm::translate(interpolateVectorKey(pNodeAnim->mPositionKeys, pNodeAnim->mNumPositionKeys, timeInTick));
-
-		transformation =  translation * rotation * scale;
-	}
-
-	glm::mat4 globalTransform = parentTransform * transformation;
-
-	if (it != m->boneMapping.end())
-	{
-		m->boneTransform[it->second] = m->globalInverseTransform * globalTransform * m->boneOffsets[it->second];
-	}
-
-	for (int i = 0; i < pNode->mNumChildren; i++) 
-	{
-		tickNodeHierarchy(m, animation, timeInTick, pNode->mChildren[i], globalTransform);
-	}
-}
-
-void  model::tickAnimation(Model* m, float deltaTime)
-{
-	aiAnimation* anim = m->TEMP_scene->mAnimations[0];
-	double tickPerSecond = anim->mTicksPerSecond == 0.0 ? 24.0 : anim->mTicksPerSecond;
-
-	m->animationTime += (deltaTime * tickPerSecond);
-	m->animationTime = fmod(m->animationTime, anim->mDuration);
-
-	tickNodeHierarchy(m, anim, m->animationTime, m->TEMP_scene->mRootNode, glm::mat4(1.0f));
-
-	glBindBuffer(GL_UNIFORM_BUFFER, m->boneTransformBuffer);
-	glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(glm::mat4) * m->boneCount, glm::value_ptr(m->boneTransform[0]));
-	glBindBuffer(GL_UNIFORM_BUFFER, 0);
-}

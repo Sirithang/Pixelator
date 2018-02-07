@@ -1,6 +1,7 @@
 #define GLEW_STATIC
 
 #include "graphic.h"
+#include "animation.h"
 #include "ui.h"
 #include "imgui_impl_glfw_gl3.h"
 #include <stdio.h>
@@ -35,13 +36,23 @@ int main()
 
 	MainMenuState mainMenuState;
 	SpriteViewerData sprViewerData;
+	AnimationListState animListState;
+	animListState.selectedAnimation = -1;
+
 	Camera cam;
 	Model model;
+
+	model.meshArray = nullptr;
+
+	std::vector<Animation> animationList;
+
+	float currentAnimTime = 0.0f;
 
 	cam.position = glm::vec3(0, 100, 250);
 	cam.target = glm::vec3(0, 100, 0);
 
-	model::fromFile(&model, "testData/test.fbx");
+	//model::fromScene(&model, scene);
+	//animation::fromScene(animationList, scene);
 
 	sprViewerData.associatedRT = &pixelRT;
 	sprViewerData.camera = &cam;
@@ -65,8 +76,11 @@ int main()
 
 		ImGui_ImplGlfwGL3_NewFrame();
 
+		DrawModelImport(&model, animationList);
+
 		DrawMainMenu(&mainMenuState);
 		DrawSpriteViewer(&sprViewerData);
+		DrawAnimationList(&animListState, animationList);
 		
 		// Camera matrix
 		glm::mat4 View = glm::lookAt(
@@ -83,8 +97,17 @@ int main()
 		glClearColor(1, 1, 1, 0);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-		model::tickAnimation(&model, deltaTime);
-		model::render(&model, &cam);
+
+		//we don't have a mesh loaded
+		if (model.meshArray != nullptr)
+		{
+			if (animationList.size() > 0)
+			{
+				currentAnimTime = animation::tickAnimation(&model, &animationList.back(), currentAnimTime, deltaTime);
+			}
+
+			model::render(&model, &cam);
+		}
 		
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		glfwGetFramebufferSize(window, &width, &height);
